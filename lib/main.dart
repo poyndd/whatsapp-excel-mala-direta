@@ -2,6 +2,8 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:android_intent_plus/android_intent.dart';
+import 'package:android_intent_plus/flag.dart';
 import 'package:excel/excel.dart' hide Border;
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -96,6 +98,15 @@ class _HomePageState extends State<HomePage> {
   int currentPhoneIndex = 0;
   bool isSending = false;
 
+  String selectedWhatsAppApp = whatsappAuto;
+
+  static const String whatsappAuto = 'auto';
+  static const String whatsappBusiness = 'business';
+  static const String whatsappNormal = 'normal';
+
+  static const String whatsappBusinessPackage = 'com.whatsapp.w4b';
+  static const String whatsappNormalPackage = 'com.whatsapp';
+
   static const String templatesPrefsKey = 'whatsapp_excel_templates_v1';
 
   @override
@@ -151,6 +162,7 @@ class _HomePageState extends State<HomePage> {
     final time = TimeOfDay.now();
     final prefix =
         '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
+
     setState(() {
       logs.insert(0, '[$prefix] $message');
     });
@@ -293,7 +305,7 @@ class _HomePageState extends State<HomePage> {
         if (value.trim().isEmpty) continue;
 
         checked++;
-        final phones = extractPhonesFromText(value);
+        final phones = extractValidPhonesFromText(value);
 
         if (phones.isNotEmpty) {
           validPhones++;
@@ -360,102 +372,130 @@ class _HomePageState extends State<HomePage> {
   }
 
   bool isValidPhoneForWhatsApp(String rawPhone) {
-    final digits = formatPhoneForWhatsApp(rawPhone);
-    return digits.length >= 12 && digits.length <= 13;
+    String digits = onlyDigits(rawPhone);
+
+    if (digits.startsWith('00')) {
+      digits = digits.substring(2);
+    }
+
+    if (digits.startsWith('55')) {
+      return digits.length == 12 || digits.length == 13;
+    }
+
+    return digits.length == 10 || digits.length == 11;
   }
 
   bool isPhoneLikeHeader(String header) {
     final normalized = normalizeText(header);
 
     return normalized.contains('celular') ||
-        normalized.contains('cel') ||
         normalized.contains('whatsapp') ||
         normalized.contains('zap') ||
         normalized.contains('telefone') ||
-        normalized.contains('telef') ||
         normalized.contains('fone') ||
         normalized == 'tel' ||
-        normalized.startsWith('tel ') ||
-        normalized.contains(' tel') ||
+        normalized.contains('tel ') ||
         normalized.contains('mobile') ||
         normalized.contains('phone') ||
         normalized.contains('contato');
   }
 
-  List<String> extractPhonesFromText(String rawText) {
-    final Set<String> phones = {};
+  List<String> extractValidPhonesFromText(String rawValue) {
+    final List<String> phones = [];
 
-    if (rawText.trim().isEmpty) {
-      return [];
+    if (rawValue.trim().isEmpty) {
+      return phones;
     }
 
-    final text = rawText
+    final text = rawValue
         .replaceAll('\n', ' ')
         .replaceAll('\r', ' ')
         .replaceAll(';', ' ')
-        .replaceAll(',', ' ')
         .replaceAll('|', ' ')
-        .replaceAll('/', ' ')
-        .replaceAll('\\', ' ');
+        .replaceAll(',', ' ')
+        .replaceAll('/', ' ');
 
-    final phonePattern = RegExp(
-      r'(\+?55\s*)?(\(?\d{2}\)?\s*)?(9?\d{4}[-\s]?\d{4})',
+    final regex = RegExp(
+      r'(?:\+?55\s*)?(?:\(?\d{2}\)?\s*)?(?:9?\d{4})[-.\s]?\d{4}',
     );
 
-    for (final match in phonePattern.allMatches(text)) {
+    final matches = regex.allMatches(text);
+
+    for (final match in matches) {
       final candidate = match.group(0) ?? '';
-      final digits = onlyDigits(candidate);
-
-      if (digits.length >= 10 && digits.length <= 13) {
+      if (isValidPhoneForWhatsApp(candidate)) {
         final formatted = formatPhoneForWhatsApp(candidate);
-
-        if (formatted.length >= 12 && formatted.length <= 13) {
+        if (!phones.contains(formatted)) {
           phones.add(formatted);
         }
       }
     }
 
-    final fullDigits = onlyDigits(rawText);
+    final only = onlyDigits(rawValue);
 
-    if (fullDigits.length >= 10 && fullDigits.length <= 13) {
-      final formatted = formatPhoneForWhatsApp(rawText);
-
-      if (formatted.length >= 12 && formatted.length <= 13) {
+    if (isValidPhoneForWhatsApp(only)) {
+      final formatted = formatPhoneForWhatsApp(only);
+      if (!phones.contains(formatted)) {
         phones.add(formatted);
       }
     }
 
-    return phones.toList();
+    return phones;
   }
 
-  List<String> getValidPhonesForRow(Map<String, String> row) {
-    final Set<String> phones = {};
+  List<String> getValidPhonesFromRow(Map<String, String> row) {
+    final List<String> candidateColumns = [];
 
-    void addPhonesFromHeader(String header) {
-      final value = row[header] ?? '';
+    if (selectedPhoneColumn != null && row.containsKey(selectedPhoneColumn)) {
+      candidateColumns.add(selectedPhoneColumn!);
+    }
 
-      for (final phone in extractPhonesFromText(value)) {
-        if (phone.length >= 12 && phone.length <= 13) {
+    for (final header in headers) {
+      if (isPhoneLikeHeader(header) && !candidateColumns.contains(header)) {
+        candidateColumns.add(header);
+      }
+    }
+
+    final List<String> phones = [];
+
+    for (final column in candidateColumns) {
+      final value = row[column] ?? '';
+      final foundPhones = extractValidPhonesFromText(value);
+
+      for (final phone in foundPhones) {
+        if (!phones.contains(phone)) {
           phones.add(phone);
         }
       }
     }
 
-    if (selectedPhoneColumn != null && row.containsKey(selectedPhoneColumn)) {
-      addPhonesFromHeader(selectedPhoneColumn!);
+    return phones;
+  }
+
+  List<String> getCurrentRowPhones() {
+    if (rows.isEmpty) {
+      return [];
     }
 
-    for (final header in headers) {
-      if (header == selectedPhoneColumn) {
-        continue;
-      }
-
-      if (isPhoneLikeHeader(header)) {
-        addPhonesFromHeader(header);
-      }
+    if (currentIndex < 0 || currentIndex >= rows.length) {
+      return [];
     }
 
-    return phones.toList();
+    return getValidPhonesFromRow(rows[currentIndex]);
+  }
+
+  String getCurrentPhoneDisplay() {
+    final phones = getCurrentRowPhones();
+
+    if (phones.isEmpty) {
+      return '';
+    }
+
+    if (currentPhoneIndex < 0 || currentPhoneIndex >= phones.length) {
+      return phones.first;
+    }
+
+    return phones[currentPhoneIndex];
   }
 
   String mergeMessage(String template, Map<String, String> row) {
@@ -496,24 +536,83 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  List<String> getCurrentPhones() {
-    if (rows.isEmpty) return [];
-    if (currentIndex < 0 || currentIndex >= rows.length) return [];
+  Future<bool> openWhatsAppByPackage({
+    required String packageName,
+    required String phone,
+    required String message,
+  }) async {
+    final encodedMessage = Uri.encodeComponent(message);
+    final uri = 'https://wa.me/$phone?text=$encodedMessage';
 
-    return getValidPhonesForRow(rows[currentIndex]);
+    try {
+      final intent = AndroidIntent(
+        action: 'android.intent.action.VIEW',
+        data: uri,
+        package: packageName,
+        flags: <int>[Flag.FLAG_ACTIVITY_NEW_TASK],
+      );
+
+      await intent.launch();
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 
-  String getCurrentPhoneRaw() {
-    final phones = getCurrentPhones();
-
-    if (phones.isEmpty) {
-      return '';
+  Future<bool> openWhatsAppSelectedApp({
+    required String phone,
+    required String message,
+  }) async {
+    if (selectedWhatsAppApp == whatsappBusiness) {
+      return await openWhatsAppByPackage(
+        packageName: whatsappBusinessPackage,
+        phone: phone,
+        message: message,
+      );
     }
 
-    final safeIndex =
-        currentPhoneIndex >= phones.length ? phones.length - 1 : currentPhoneIndex;
+    if (selectedWhatsAppApp == whatsappNormal) {
+      return await openWhatsAppByPackage(
+        packageName: whatsappNormalPackage,
+        phone: phone,
+        message: message,
+      );
+    }
 
-    return phones[safeIndex];
+    bool opened = await openWhatsAppByPackage(
+      packageName: whatsappBusinessPackage,
+      phone: phone,
+      message: message,
+    );
+
+    if (opened) {
+      return true;
+    }
+
+    opened = await openWhatsAppByPackage(
+      packageName: whatsappNormalPackage,
+      phone: phone,
+      message: message,
+    );
+
+    if (opened) {
+      return true;
+    }
+
+    final encodedMessage = Uri.encodeComponent(message);
+
+    final fallback = Uri.parse(
+      'https://wa.me/$phone?text=$encodedMessage',
+    );
+
+    if (await canLaunchUrl(fallback)) {
+      return await launchUrl(
+        fallback,
+        mode: LaunchMode.externalApplication,
+      );
+    }
+
+    return false;
   }
 
   Future<void> openWhatsAppForCurrentRow() async {
@@ -528,7 +627,7 @@ class _HomePageState extends State<HomePage> {
     }
 
     final row = rows[currentIndex];
-    final phones = getValidPhonesForRow(row);
+    final phones = getValidPhonesFromRow(row);
 
     if (phones.isEmpty) {
       addLog('Nenhum celular válido encontrado na linha ${currentIndex + 2}.');
@@ -541,52 +640,30 @@ class _HomePageState extends State<HomePage> {
 
     final phone = phones[currentPhoneIndex];
     final message = mergeMessage(messageController.text, row);
-    final encodedMessage = Uri.encodeComponent(message);
-
-    final appUri = Uri.parse(
-      'whatsapp://send?phone=$phone&text=$encodedMessage',
-    );
-
-    final webUri = Uri.parse(
-      'https://wa.me/$phone?text=$encodedMessage',
-    );
 
     try {
-      bool opened = false;
-
-      if (await canLaunchUrl(appUri)) {
-        opened = await launchUrl(
-          appUri,
-          mode: LaunchMode.externalApplication,
-        );
-      }
-
-      if (!opened && await canLaunchUrl(webUri)) {
-        opened = await launchUrl(
-          webUri,
-          mode: LaunchMode.externalApplication,
-        );
-      }
+      final opened = await openWhatsAppSelectedApp(
+        phone: phone,
+        message: message,
+      );
 
       if (opened) {
+        final sentPhoneNumber = currentPhoneIndex + 1;
+        final totalPhones = phones.length;
+
         addLog(
-          'WhatsApp aberto para linha ${currentIndex + 2}, celular ${currentPhoneIndex + 1}/${phones.length}: $phone',
+          'WhatsApp aberto para linha ${currentIndex + 2}, telefone $sentPhoneNumber de $totalPhones: $phone',
         );
 
         setState(() {
-          if (currentPhoneIndex < phones.length - 1) {
-            currentPhoneIndex++;
-          } else {
-            currentPhoneIndex = 0;
-
-            if (currentIndex < rows.length - 1) {
-              currentIndex++;
-              addLog('Todos os celulares da linha anterior foram abertos. Próxima linha preparada.');
-            } else {
-              addLog('Todos os celulares da última linha foram abertos.');
-            }
-          }
+          currentPhoneIndex++;
         });
+
+        if (currentPhoneIndex >= phones.length) {
+          addLog(
+            'Todos os telefones válidos da linha ${currentIndex + 2} foram preparados.',
+          );
+        }
       } else {
         addLog('Não foi possível abrir o WhatsApp.');
       }
@@ -598,26 +675,11 @@ class _HomePageState extends State<HomePage> {
   void goToNextRow() {
     if (rows.isEmpty) return;
 
-    final phones = getValidPhonesForRow(rows[currentIndex]);
-
-    if (phones.isNotEmpty && currentPhoneIndex < phones.length - 1) {
-      setState(() {
-        currentPhoneIndex++;
-      });
-
-      addLog(
-        'Avançou para o celular ${currentPhoneIndex + 1}/${phones.length} da linha ${currentIndex + 2}.',
-      );
-
-      return;
-    }
-
     if (currentIndex < rows.length - 1) {
       setState(() {
         currentIndex++;
         currentPhoneIndex = 0;
       });
-
       addLog('Avançou para a linha ${currentIndex + 2}.');
     } else {
       addLog('Fim da base.');
@@ -627,27 +689,11 @@ class _HomePageState extends State<HomePage> {
   void goToPreviousRow() {
     if (rows.isEmpty) return;
 
-    if (currentPhoneIndex > 0) {
-      setState(() {
-        currentPhoneIndex--;
-      });
-
-      final phones = getValidPhonesForRow(rows[currentIndex]);
-
-      addLog(
-        'Voltou para o celular ${currentPhoneIndex + 1}/${phones.length} da linha ${currentIndex + 2}.',
-      );
-
-      return;
-    }
-
     if (currentIndex > 0) {
       setState(() {
         currentIndex--;
-        final previousPhones = getValidPhonesForRow(rows[currentIndex]);
-        currentPhoneIndex = previousPhones.isEmpty ? 0 : previousPhones.length - 1;
+        currentPhoneIndex = 0;
       });
-
       addLog('Voltou para a linha ${currentIndex + 2}.');
     }
   }
@@ -696,7 +742,6 @@ class _HomePageState extends State<HomePage> {
     if (template.preferredPhoneColumn != null &&
         headers.contains(template.preferredPhoneColumn)) {
       selectedPhoneColumn = template.preferredPhoneColumn;
-      currentPhoneIndex = 0;
     }
 
     addLog('Modelo carregado: ${template.name}');
@@ -803,6 +848,27 @@ class _HomePageState extends State<HomePage> {
     setState(() {});
   }
 
+  Widget buildLgpdWarning() {
+    return Card(
+      color: Colors.amber.shade50,
+      child: const Padding(
+        padding: EdgeInsets.all(12),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(Icons.warning_amber, color: Colors.orange),
+            SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'Atenção LGPD/CDC: revise cuidadosamente os campos de mesclagem antes do envio. Evite expor CPF, contrato, valores, situação de atraso ou outros dados sensíveis quando a comunicação puder ser vista por terceiros.',
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget buildExcelSection() {
     return Card(
       child: Padding(
@@ -852,8 +918,8 @@ class _HomePageState extends State<HomePage> {
                 value: selectedPhoneColumn,
                 decoration: InputDecoration(
                   labelText: detectedPhoneColumn == null
-                      ? 'Coluna de telefone principal'
-                      : 'Coluna de telefone sugerida: $detectedPhoneColumn',
+                      ? 'Coluna principal de telefone'
+                      : 'Coluna principal sugerida: $detectedPhoneColumn',
                   border: const OutlineInputBorder(),
                 ),
                 items: headers
@@ -875,7 +941,7 @@ class _HomePageState extends State<HomePage> {
             Text('Registros carregados: ${rows.length}'),
             const SizedBox(height: 4),
             const Text(
-              'Obs.: além da coluna principal, o app também procura celulares válidos em outras colunas com nomes parecidos com celular, telefone, WhatsApp, zap, fone ou contato.',
+              'Observação: além da coluna principal, o app também procura celulares em outras colunas com cabeçalho parecido com celular, telefone, WhatsApp, zap, fone ou contato.',
               style: TextStyle(fontSize: 12),
             ),
           ],
@@ -1027,15 +1093,14 @@ class _HomePageState extends State<HomePage> {
 
   Widget buildPreviewSection() {
     final preview = getCurrentPreviewMessage();
-    final phones = getCurrentPhones();
-
-    final safePhoneIndex = phones.isEmpty
+    final phones = getCurrentRowPhones();
+    final currentPhone = getCurrentPhoneDisplay();
+    final totalPhones = phones.length;
+    final phonePosition = totalPhones == 0
         ? 0
-        : currentPhoneIndex >= phones.length
-            ? phones.length - 1
-            : currentPhoneIndex;
-
-    final currentPhone = phones.isEmpty ? '' : phones[safePhoneIndex];
+        : currentPhoneIndex >= totalPhones
+            ? totalPhones
+            : currentPhoneIndex + 1;
 
     return Card(
       child: Padding(
@@ -1054,12 +1119,30 @@ class _HomePageState extends State<HomePage> {
               Text('Linha atual no Excel: ${currentIndex + 2}'),
               Text('Registro: ${currentIndex + 1} de ${rows.length}'),
               const SizedBox(height: 8),
-              Text('Celulares válidos encontrados nesta linha: ${phones.length}'),
+              Text('Telefones válidos encontrados: $totalPhones'),
               Text(
-                phones.isEmpty
-                    ? 'Celular atual: nenhum'
-                    : 'Celular atual: ${safePhoneIndex + 1}/${phones.length} - $currentPhone',
+                totalPhones == 0
+                    ? 'Telefone WhatsApp: nenhum telefone válido'
+                    : 'Telefone atual: $phonePosition de $totalPhones - $currentPhone',
               ),
+              if (phones.length > 1) ...[
+                const SizedBox(height: 4),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: phones.asMap().entries.map((entry) {
+                    final index = entry.key;
+                    final phone = entry.value;
+                    final selected = index == currentPhoneIndex;
+
+                    return Chip(
+                      label: Text('${index + 1}. $phone'),
+                      backgroundColor:
+                          selected ? Colors.green.shade100 : null,
+                    );
+                  }).toList(),
+                ),
+              ],
               const SizedBox(height: 8),
               Container(
                 width: double.infinity,
@@ -1071,6 +1154,43 @@ class _HomePageState extends State<HomePage> {
                 child: Text(
                   preview.isEmpty ? 'Prévia vazia.' : preview,
                 ),
+              ),
+              const SizedBox(height: 8),
+              DropdownButtonFormField<String>(
+                value: selectedWhatsAppApp,
+                decoration: const InputDecoration(
+                  labelText: 'Aplicativo para abrir',
+                  border: OutlineInputBorder(),
+                ),
+                items: const [
+                  DropdownMenuItem(
+                    value: whatsappAuto,
+                    child: Text('Automático: tentar Business e depois normal'),
+                  ),
+                  DropdownMenuItem(
+                    value: whatsappBusiness,
+                    child: Text('WhatsApp Business'),
+                  ),
+                  DropdownMenuItem(
+                    value: whatsappNormal,
+                    child: Text('WhatsApp normal'),
+                  ),
+                ],
+                onChanged: (value) {
+                  if (value == null) return;
+
+                  setState(() {
+                    selectedWhatsAppApp = value;
+                  });
+
+                  if (value == whatsappBusiness) {
+                    addLog('Aplicativo selecionado: WhatsApp Business.');
+                  } else if (value == whatsappNormal) {
+                    addLog('Aplicativo selecionado: WhatsApp normal.');
+                  } else {
+                    addLog('Aplicativo selecionado: automático.');
+                  }
+                },
               ),
               const SizedBox(height: 8),
               Row(
@@ -1102,7 +1222,7 @@ class _HomePageState extends State<HomePage> {
               ),
               const SizedBox(height: 8),
               const Text(
-                'Observação: se a linha tiver mais de um celular válido, o app prepara a mesma mensagem para cada celular, um por vez.',
+                'Observação: o app abre o WhatsApp com a mensagem pronta. O envio final é confirmado dentro do WhatsApp.',
                 style: TextStyle(fontSize: 12),
               ),
             ],
@@ -1139,27 +1259,6 @@ class _HomePageState extends State<HomePage> {
                   },
                 ),
               ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget buildLgpdWarning() {
-    return Card(
-      color: Colors.amber.shade50,
-      child: const Padding(
-        padding: EdgeInsets.all(12),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Icon(Icons.warning_amber, color: Colors.orange),
-            SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                'Atenção LGPD/CDC: revise cuidadosamente os campos de mesclagem antes do envio. Evite expor CPF, contrato, valores, situação de atraso ou outros dados sensíveis quando a comunicação puder ser vista por terceiros.',
-              ),
-            ),
           ],
         ),
       ),
