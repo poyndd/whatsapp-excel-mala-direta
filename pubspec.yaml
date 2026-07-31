@@ -1,5 +1,5 @@
 name: whatsapp_excel_mala_direta
-description: Mala direta WhatsApp com Excel, campos de mesclagem e modelos salvos.
+description: Mala direta WhatsApp com Excel
 publish_to: "none"
 
 version: 1.0.0+1
@@ -11,18 +11,21 @@ dependencies:
   flutter:
     sdk: flutter
 
-  file_picker: ^8.1.2
-  excel: ^4.0.6
-  url_launcher: ^6.3.0
-  shared_preferences: ^2.3.2
-  path_provider: ^2.1.4
-  share_plus: ^10.0.2
+  file_picker: 8.1.2
+  excel: 4.0.6
+  url_launcher: 6.3.0
+  shared_preferences: 2.3.2
+  path_provider: 2.1.4
+  share_plus: 10.0.2
+
+dependency_overrides:
+  flutter_plugin_android_lifecycle: 2.0.24
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
 
-  flutter_lints: ^4.0.0
+  flutter_lints: 4.0.0
 
 flutter:
   uses-material-design: true
