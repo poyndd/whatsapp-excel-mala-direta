@@ -5,7 +5,6 @@ on:
   push:
     branches:
       - main
-      - master
 
 jobs:
   build:
@@ -33,6 +32,75 @@ jobs:
 
       - name: Get dependencies
         run: flutter pub get
+
+      - name: Install Android SDK 36
+        run: yes | ${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager "platforms;android-36"
+
+      - name: Force compileSdk 36 everywhere
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          roots = [
+              Path("android"),
+              Path.home() / ".pub-cache" / "hosted" / "pub.dev",
+          ]
+
+          files = []
+
+          for root in roots:
+              if root.exists():
+                  files.extend(root.rglob("build.gradle"))
+                  files.extend(root.rglob("build.gradle.kts"))
+
+          changed = []
+
+          for path in files:
+              try:
+                  text = path.read_text(encoding="utf-8")
+              except Exception:
+                  continue
+
+              original = text
+
+              replacements = [
+                  (r"compileSdkVersion\s+flutter\.compileSdkVersion", "compileSdkVersion 36"),
+                  (r"compileSdkVersion\s+\d+", "compileSdkVersion 36"),
+                  (r"compileSdkVersion\s*=\s*flutter\.compileSdkVersion", "compileSdkVersion = 36"),
+                  (r"compileSdkVersion\s*=\s*\d+", "compileSdkVersion = 36"),
+                  (r"compileSdk\s+flutter\.compileSdkVersion", "compileSdk 36"),
+                  (r"compileSdk\s+\d+", "compileSdk 36"),
+                  (r"compileSdk\s*=\s*flutter\.compileSdkVersion", "compileSdk = 36"),
+                  (r"compileSdk\s*=\s*\d+", "compileSdk = 36"),
+              ]
+
+              for pattern, repl in replacements:
+                  text = re.sub(pattern, repl, text)
+
+              if text != original:
+                  path.write_text(text, encoding="utf-8")
+                  changed.append(str(path))
+
+          print("Arquivos Gradle alterados:")
+          for item in changed:
+              print(item)
+
+          print("")
+          print("Conferindo compileSdk:")
+          for path in files:
+              path_text = str(path)
+              if "file_picker" in path_text or "flutter_plugin_android_lifecycle" in path_text or str(path).startswith("android"):
+                  try:
+                      content = path.read_text(encoding="utf-8")
+                  except Exception:
+                      continue
+
+                  for line in content.splitlines():
+                      if "compileSdk" in line:
+                          print(f"{path}: {line.strip()}")
+
+          PY
 
       - name: Build release APK
         run: flutter build apk --release
