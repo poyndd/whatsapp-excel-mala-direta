@@ -8,27 +8,78 @@ on:
 
 jobs:
   build:
+    name: Build Android APK
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-java@v4
+      - name: Set up Java
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
 
-      - uses: subosito/flutter-action@v2
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
         with:
           channel: stable
+          cache: true
 
-      - run: flutter create --platforms=android .
+      - name: Create Android platform files
+        run: flutter create --platforms=android .
 
-      - run: flutter pub get
+      - name: Get dependencies
+        run: flutter pub get
 
-      - run: flutter build apk --release
+      - name: Install Android SDK 36
+        run: yes | ${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager "platforms;android-36"
 
-      - uses: actions/upload-artifact@v4
+      - name: Force compileSdk 36
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          paths = []
+
+          if Path("android").exists():
+              paths.extend(Path("android").rglob("build.gradle"))
+              paths.extend(Path("android").rglob("build.gradle.kts"))
+
+          pub_cache = Path.home() / ".pub-cache"
+          if pub_cache.exists():
+              paths.extend(pub_cache.rglob("build.gradle"))
+              paths.extend(pub_cache.rglob("build.gradle.kts"))
+
+          for path in paths:
+              try:
+                  text = path.read_text(encoding="utf-8")
+              except Exception:
+                  continue
+
+              original = text
+
+              text = text.replace("compileSdk = flutter.compileSdkVersion", "compileSdk = 36")
+              text = text.replace("compileSdkVersion flutter.compileSdkVersion", "compileSdkVersion 36")
+              text = text.replace("compileSdkVersion = flutter.compileSdkVersion", "compileSdkVersion = 36")
+
+              text = re.sub(r"compileSdk\s*=\s*\d+", "compileSdk = 36", text)
+              text = re.sub(r"compileSdkVersion\s+\\d+", "compileSdkVersion 36", text)
+              text = re.sub(r"compileSdkVersion\s*=\s*\\d+", "compileSdkVersion = 36", text)
+
+              if text != original:
+                  path.write_text(text, encoding="utf-8")
+                  print(f"Updated compileSdk in {path}")
+
+          PY
+
+      - name: Build release APK
+        run: flutter build apk --release
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
         with:
-          name: apk
+          name: whatsapp-excel-mala-direta-apk
           path: build/app/outputs/flutter-apk/app-release.apk
